@@ -3,61 +3,131 @@
 #include <FS.h>
 #include <JPEGDecoder.h>
 #include <TFT_eSPI.h>
+#include <WiFi.h>
+#include <ArduinoOTA.h>
+
+#define PROJECT_NAME "BOX BUDDY"
+#define PROJECT_VERSION "2.0"
+
+// SCREEN SIZE: 480 x 320
+#define SCREEN_W TFT_HEIGHT
+#define SCREEN_H TFT_WIDTH
+
 
 #include "Free_Fonts.h"
 
 #define LOAD_SD_LIBRARY;
 
+const char* ssid     = "Burton";
+const char* password = "Takeachance01";
+
+class Screen {
+  public:
+    TFT_eSPI* x;
+    uint32_t HightLightColor;
+    
+    Screen(TFT_eSPI* tftObject) {
+      x = tftObject;
+      x->setTextWrap(true, true);
+      x->setCursor(0, 15);
+      x->setFreeFont(FSS9);
+      HightLightColor = ILI9486_GREENYELLOW;
+    }
+
+
+    void consoleconsoleconsoleWrite(String text, bool ln = false, bool forceNoPadding = false) {
+      if (x->getTextPadding() && !forceNoPadding) {
+        x->setCursor(x->getCursorX() + x->getTextPadding(), x->getCursorY());
+      }
+      if (ln)
+        x->println(text);
+      else
+        x->print(text);
+    
+    }
+
+    void highlight(String text) {
+      uint32_t tmpCol = x->textcolor;
+      x->setTextColor(HightLightColor);
+      consoleWrite(text, false, true);
+      x->setTextColor(tmpCol);
+    }
+
+};
+
+class POSTScreen: public Screen {
+
+  public:
+    POSTScreen(TFT_eSPI* tftObject):Screen(tftObject) {
+      x->setTextPadding(5);
+      x->fillScreen(ILI9486_BLACK);
+      
+      x->fillRect(0, 22, SCREEN_W, 50, ILI9486_DARKCYAN);
+      
+      x->setTextColor(ILI9486_WHITE);
+      x->setFreeFont(FSS18);
+      x->setTextDatum(TL_DATUM);
+      consoleWrite("", true);
+      consoleWrite(String(PROJECT_NAME " v" PROJECT_VERSION), true);
+
+      x->drawFastHLine(0, 20, SCREEN_W, ILI9486_CYAN);
+      x->drawFastHLine(0, 21, SCREEN_W, ILI9486_LIGHTGREY);
+      x->drawFastHLine(0, 71, SCREEN_W, ILI9486_CYAN);
+      x->drawFastHLine(0, 72, SCREEN_W, ILI9486_LIGHTGREY);
+
+      x->setTextColor(ILI9486_DARKCYAN);
+      x->setFreeFont(FM9);
+      
+      consoleWrite("", true);
+      consoleWrite("Starting up the system ...", true);
+      delay(1500);
+    }
+
+  
+};
+
 TFT_eSPI tft = TFT_eSPI();  // Invoke custom library
-File root;
-
-String gloablImageList[255];
-int gloablImageListCount = 0;
-int imageRotationCount = 0;
-
-void printC(int d) {
-  Serial.println();
-  Serial.println(d);
-  Serial.print("gloablImageListCount: ");
-  Serial.print(gloablImageListCount);
-  Serial.println();
-  Serial.println();
-}
 
 void setup() {
-
+  
+  initTFT();
+  POSTScreen post = POSTScreen(&tft);
+  post.consoleWrite("Opening serial debug ");
+  post.highlight("115200 bauds");
+  post.consoleWrite(" UART", true, true);
+  
   Serial.begin(115200);
 
-  initSDCardReader();
-  initTFT();
-  initWiFi();
+  post.consoleWrite("Initiating WiFi connectivity", true);
+  initWiFi(post);
 
-  // onscreenError("ERROR", "Your SD card is missing, please insert an SD card and restart the device.");
-
-  root = SD.open("/");
-
-  delay(10000);
-
-  generateImageList();
-
-  printC(0);
+  post.consoleWrite("Looking at SPIFFS health", true);
+  if (!SPIFFS.begin()) {
+    post.consoleWrite("Formating filesystem ...", true);
+    SPIFFS.format();
+    SPIFFS.begin();
+  }
   
-  delay(2000);
+  File root = SPIFFS.open("/");
+  File file = root.openNextFile();
 
-  for (int i=0; i < gloablImageListCount; i++) {
-    Serial.print(i);
-    Serial.print(" : ");
-    Serial.println(gloablImageList[i]);
+  while(file){
+ 
+      Serial.print("FILE: ");
+      Serial.println(file.name());
+ 
+      file = root.openNextFile();
   }
 
-  printC(1);
+  post.consoleWrite("Initiating SD card reader module", true);
+  //initSDCardReader();
+  
+  post.consoleWrite("Initiating OTA", true);
+  initOTA();
 
-}
-
-
-void laodImages() {
-  Serial.println("Trying to load: 20200607_190316");
-  drawJpeg("/20200607_190316.jpg", 0, 0);
+  post.consoleWrite("POST is done!", true);
+  post.consoleWrite("", true);
+  post.consoleWrite(PROJECT_NAME " is a personal devices made to extend any device display. Display alarms, reminders, photos, states etc, using the RESTApi interface or the Serial COM.");
 }
 
 void initSDCardReader() {
@@ -76,127 +146,65 @@ void initSDCardReader() {
 }
 
 void initTFT() {
-
   tft.begin();
-
-  tft.setRotation(0);  // landscape
-  tft.fillScreen(TFT_BLACK);
-  
+  tft.setRotation(1);  // landscape
 }
 
-void initWiFi() {
-  
-}
+void initWiFi(POSTScreen p) {
+   
+    p.consoleWrite(String("Connecting to WIFI " + String(ssid)), true);
+    
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(ssid, password);
 
-void onscreenError(String title, String text) {
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        Serial.print(".");
+    }
 
-  int r = tft.getRotation();
-
-  int padx, pady = 0;
-
-  if (r == 0 || r == 2) { //PORTRAIT
-    padx = 5; pady = 20;
-  } else {                //LANDSCAPE
-    padx = 20; pady = 5;
-  }
-  
-  tft.setTextColor(TFT_RED);
-  tft.setFreeFont(FSSB24);
-  tft.setCursor(padx, 40 + pady);
-  tft.print(title); // Print the font name onto the TFT screen
-  tft.fillRect(5 + padx, 50 + pady, tft.width() - pady, 2, TFT_DARKGREY);
-  tft.setTextColor(TFT_WHITE);
-  tft.setFreeFont(FSS9);
-  tft.setCursor(padx + 1, pady + 70);
-  tft.setTextPadding(padx + 1);
-  tft.setTextWrap(true, true);
-  tft.println(text);
-
+    p.consoleWrite(String("WiFi Connected on " + String(ssid)));
+    p.consoleWrite(" (", false, true);
+    p.highlight(WiFi.localIP().toString());
+    p.consoleWrite(")", true, true);
 
 }
 
-void POST(String text) {
-  
+void initOTA() {
+  ArduinoOTA.setHostname("bigboxbuddy");
+  ArduinoOTA
+    .onStart([]() {
+      String type;
+      if (ArduinoOTA.getCommand() == U_FLASH)
+        type = "sketch";
+      else // U_SPIFFS
+        type = "filesystem";
+
+      tft.fillScreen(TFT_BLACK);
+      // NOTE: if updating SPIFFS this would be the place to unmount SPIFFS using SPIFFS.end()
+      tft.println("Start updating " + type);
+    })
+    .onEnd([]() {
+      tft.println("\nEnd");
+    })
+    .onProgress([](unsigned int progress, unsigned int total) {
+      tft.setTextDatum(CC_DATUM);
+      tft.fillRect(200, 150, 200, 30, ILI9486_BLACK);
+      tft.setTextColor(ILI9486_RED);
+      tft.drawNumber((progress * 100) / total, 240, 160, 2);
+    })
+    .onError([](ota_error_t error) {
+      tft.printf("Error[%u]: ", error);
+      if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+      else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
+      else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+      else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
+      else if (error == OTA_END_ERROR) Serial.println("End Failed");
+    });
+
+  ArduinoOTA.begin();
 }
-
-bool SDReady = false;
-int readError = 0;
-
 
 void loop() {
-  printC(2);
-  if (readError == 0) {
-    if (SDReady) {
-      // load next photo;
+  ArduinoOTA.handle();
 
-      if (imageRotationCount >= gloablImageListCount) {
-        imageRotationCount = 0;
-      }
-
-      Serial.print(imageRotationCount);
-      Serial.print(" / ");
-      Serial.println(gloablImageListCount);
-      printC(5);
-      char __dataFileName[gloablImageList[imageRotationCount].length() + 1];
-      gloablImageList[imageRotationCount++].toCharArray(__dataFileName, sizeof(__dataFileName));
-      readError = drawJpeg(__dataFileName, 0, 0);
-      printC(4);
-      delay(5000);
-    }
-    else {
-      SDReady = true;
-      readError = 0;
-      // recreate photo list and load first photo
-      Serial.println("Generating Image List...");
-      generateImageList();
-      printC(3);
-    }
-  } else {
-    SDReady = false;
-    onscreenError("Error SDCard", "In order to use this BuddyBox, you need to insert an micro SD card as permanant storage device.");
-    delay(3000); //Wait a bit to retry SD
-  }
-  
-  
-}
-
-void generateImageList() {
-  gloablImageListCount = 0;
-  root.rewindDirectory();
-  
-  String h = "";
-  
-  while (true) {
-
-    File entry =  root.openNextFile();
-    
-    if (!entry) {
-      // no more files
-      Serial.println("No more files");
-      break;
-    }
-
-    h = entry.name();
-
-    Serial.print("Adding ");
-    Serial.print(h);
-    Serial.print(" into ");
-    Serial.println(gloablImageListCount);
-    
-    if (h.endsWith(".jpg") && !h.startsWith("/.")) {
-      gloablImageList[gloablImageListCount++] = String(entry.name());
-    }
-  
-//    if (entry.isDirectory()) {
-//      Serial.println("/");
-//      printDirectory(entry, numTabs + 1);
-//    } else {
-//      // files have sizes, directories do not
-//      Serial.print("\t\t");
-//      Serial.println(entry.size(), DEC);
-//    }
-
-    entry.close();
-  }
-    
 }
